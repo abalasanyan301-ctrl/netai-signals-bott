@@ -31,15 +31,15 @@ def send_telegram(message):
 # ПОЛУЧЕНИЕ ДАННЫХ С BINANCE
 # ============================================
 def get_klines(symbol, interval="4h", limit=50):
-    # Bybit interval mapping
-    interval_map = {"4h": "240", "1h": "60", "15m": "15", "1d": "D"}
-    bybit_interval = interval_map.get(interval, "240")
+    # OKX expects symbols like BTC-USDT and a specific interval format
+    interval_map = {"4h": "4H", "1h": "1H", "15m": "15m", "1d": "1D"}
+    okx_interval = interval_map.get(interval, "4H")
+    okx_symbol = symbol.replace("USDT", "-USDT")
 
-    url = "https://api.bybit.com/v5/market/kline"
+    url = "https://www.okx.com/api/v5/market/candles"
     params = {
-        "category": "spot",
-        "symbol": symbol,
-        "interval": bybit_interval,
+        "instId": okx_symbol,
+        "bar": okx_interval,
         "limit": limit
     }
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -48,17 +48,17 @@ def get_klines(symbol, interval="4h", limit=50):
         response = requests.get(url, params=params, headers=headers, timeout=10)
         data = response.json()
 
-        if data.get("retCode") != 0:
-            print(f"Ошибка API Bybit: {data}")
+        if data.get("code") != "0":
+            print(f"Ошибка API OKX: {data}")
             return []
 
-        raw_candles = data["result"]["list"]
-        # Bybit возвращает данные от новых к старым - разворачиваем
+        raw_candles = data["data"]
+        # OKX возвращает данные от новых к старым - разворачиваем
         raw_candles = list(reversed(raw_candles))
 
         candles = []
         for d in raw_candles:
-            # Формат Bybit: [timestamp, open, high, low, close, volume, turnover]
+            # Формат OKX: [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm]
             candles.append({
                 "open": float(d[1]),
                 "high": float(d[2]),
