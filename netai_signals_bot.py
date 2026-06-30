@@ -31,24 +31,39 @@ def send_telegram(message):
 # ПОЛУЧЕНИЕ ДАННЫХ С BINANCE
 # ============================================
 def get_klines(symbol, interval="4h", limit=50):
-    url = "https://api.binance.com/api/v3/klines"
+    urls = [
+        "https://api.binance.com/api/v3/klines",
+        "https://api1.binance.com/api/v3/klines",
+        "https://data-api.binance.vision/api/v3/klines"
+    ]
     params = {"symbol": symbol, "interval": interval, "limit": limit}
-    try:
-        response = requests.get(url, params=params)
-        data = response.json()
-        candles = []
-        for d in data:
-            candles.append({
-                "open": float(d[1]),
-                "high": float(d[2]),
-                "low": float(d[3]),
-                "close": float(d[4]),
-                "volume": float(d[5])
-            })
-        return candles
-    except Exception as e:
-        print(f"Ошибка получения данных: {e}")
-        return []
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    for url in urls:
+        try:
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+            data = response.json()
+
+            if not isinstance(data, list):
+                print(f"Ошибка API ({url}): {data}")
+                continue
+
+            candles = []
+            for d in data:
+                candles.append({
+                    "open": float(d[1]),
+                    "high": float(d[2]),
+                    "low": float(d[3]),
+                    "close": float(d[4]),
+                    "volume": float(d[5])
+                })
+            return candles
+        except Exception as e:
+            print(f"Ошибка получения данных с {url}: {e}")
+            continue
+
+    print(f"⚠️ Не удалось получить данные для {symbol} ни с одного источника")
+    return []
 
 # ============================================
 # АНАЛИЗ ОБЪЁМА И ГЕНЕРАЦИЯ СИГНАЛА
