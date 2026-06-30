@@ -1,5 +1,7 @@
 import requests
 import time
+import json
+import os
 from datetime import datetime
 
 # ============================================
@@ -8,9 +10,11 @@ from datetime import datetime
 TELEGRAM_TOKEN = "8627627203:AAHIA45pQaoxrFT2en0Szlwfcpc64rBGOhk"
 CHAT_ID = "6975085722"
 SYMBOLS = ["BTCUSDT", "ETHUSDT"]
-INTERVAL = "4h"  # 4-часовой таймфрейм
-SIGNALS_PER_DAY = 5
-CHECK_INTERVAL = 300  # проверка каждые 5 минут
+INTERVAL = "1h"  # 1-часовой таймфрейм
+SIGNALS_PER_DAY = 10
+CHECK_INTERVAL = 180  # проверка каждые 3 минуты (чаще, т.к. таймфрейм короче)
+REPORT_EVERY_DAYS = 5
+HISTORY_FILE = "signals_history.json"
 
 # ============================================
 # ОТПРАВКА СООБЩЕНИЯ В TELEGRAM
@@ -23,17 +27,35 @@ def send_telegram(message):
         "parse_mode": "HTML"
     }
     try:
-        requests.post(url, json=payload)
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"Ошибка отправки: {e}")
 
 # ============================================
-# ПОЛУЧЕНИЕ ДАННЫХ С BINANCE
+# ХРАНЕНИЕ ИСТОРИИ СИГНАЛОВ (для отчётов)
 # ============================================
-def get_klines(symbol, interval="4h", limit=50):
-    # OKX expects symbols like BTC-USDT and a specific interval format
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def save_history(history):
+    try:
+        with open(HISTORY_FILE, "w") as f:
+            json.dump(history, f)
+    except Exception as e:
+        print(f"Ошибка сохранения истории: {e}")
+
+# ============================================
+# ПОЛУЧЕНИЕ ДАННЫХ С OKX
+# ============================================
+def get_klines(symbol, interval="1h", limit=50):
     interval_map = {"4h": "4H", "1h": "1H", "15m": "15m", "1d": "1D"}
-    okx_interval = interval_map.get(interval, "4H")
+    okx_interval = interval_map.get(interval, "1H")
     okx_symbol = symbol.replace("USDT", "-USDT")
 
     url = "https://www.okx.com/api/v5/market/candles"
@@ -53,12 +75,10 @@ def get_klines(symbol, interval="4h", limit=50):
             return []
 
         raw_candles = data["data"]
-        # OKX возвращает данные от новых к старым - разворачиваем
         raw_candles = list(reversed(raw_candles))
 
         candles = []
         for d in raw_candles:
-            # Формат OKX: [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm]
             candles.append({
                 "open": float(d[1]),
                 "high": float(d[2]),
@@ -68,8 +88,22 @@ def get_klines(symbol, interval="4h", limit=50):
             })
         return candles
     except Exception as e:
-        print(f"Ошибка получения данных с Bybit: {e}")
+        print(f"Ошибка получения данных с OKX: {e}")
         return []
+
+def get_current_price(symbol):
+    okx_symbol = symbol.replace("USDT", "-USDT")
+    url = "https://www.okx.com/api/v5/market/ticker"
+    params = {"instId": okx_symbol}
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        response = requests.get(url, params=params, headers=headers, timeout=10)
+        data = response.json()
+        if data.get("code") == "0":
+            return float(data["data"][0]["last"])
+    except Exception as e:
+        print(f"Ошибка получения цены: {e}")
+    return None
 
 # ============================================
 # АНАЛИЗ ОБЪЁМА И ГЕНЕРАЦИЯ СИГНАЛА
@@ -85,7 +119,6 @@ def analyze(symbol, candles):
     avg_volume = sum(volumes[-20:-1]) / 19
     volume_spike = current["volume"] / avg_volume
 
-    # EMA расчёт
     def ema(data, period):
         k = 2 / (period + 1)
         ema_val = data[0]
@@ -96,7 +129,6 @@ def analyze(symbol, candles):
     ema9 = ema(closes[-9:], 9)
     ema21 = ema(closes[-21:], 21)
 
-    # RSI расчёт
     def rsi(data, period=14):
         gains, losses = [], []
         for i in range(1, len(data)):
@@ -113,13 +145,11 @@ def analyze(symbol, candles):
     rsi_val = rsi(closes[-15:])
     price = current["close"]
 
-    # Уровни входа и выхода
     support = min([c["low"] for c in candles[-10:]])
     resistance = max([c["high"] for c in candles[-10:]])
 
     signal = None
 
-    # СИГНАЛ НА ПОКУПКУ
     if (volume_spike > 1.8 and
         ema9 > ema21 and
         rsi_val < 65 and
@@ -131,7 +161,9 @@ def analyze(symbol, candles):
 
         signal = {
             "type": "🟢 ПОКУПКА (LONG)",
+            "direction": "long",
             "symbol": symbol.replace("USDT", "/USDT"),
+            "raw_symbol": symbol,
             "price": price,
             "entry": f"{round(price * 0.999, 2)} - {round(price * 1.001, 2)}",
             "stop_loss": stop_loss,
@@ -143,7 +175,6 @@ def analyze(symbol, candles):
             "resistance": round(resistance, 2)
         }
 
-    # СИГНАЛ НА ПРОДАЖУ
     elif (volume_spike > 1.8 and
           ema9 < ema21 and
           rsi_val > 55 and
@@ -155,7 +186,9 @@ def analyze(symbol, candles):
 
         signal = {
             "type": "🔴 ПРОДАЖА (SHORT)",
+            "direction": "short",
             "symbol": symbol.replace("USDT", "/USDT"),
+            "raw_symbol": symbol,
             "price": price,
             "entry": f"{round(price * 0.999, 2)} - {round(price * 1.001, 2)}",
             "stop_loss": stop_loss,
@@ -170,7 +203,7 @@ def analyze(symbol, candles):
     return signal
 
 # ============================================
-# ФОРМАТИРОВАНИЕ СООБЩЕНИЯ
+# ФОРМАТИРОВАНИЕ СООБЩЕНИЯ СИГНАЛА
 # ============================================
 def format_signal(signal):
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
@@ -191,7 +224,7 @@ def format_signal(signal):
 🔵 <b>Поддержка:</b> ${signal['support']:,}
 🔴 <b>Сопротивление:</b> ${signal['resistance']:,}
 
-⏰ <b>Таймфрейм:</b> 4H
+⏰ <b>Таймфрейм:</b> 1H
 🕐 {now}
 ━━━━━━━━━━━━━━━━━━━━
 ⚠️ Торгуй осознанно. Это не финансовый совет.
@@ -199,26 +232,95 @@ def format_signal(signal):
     return msg.strip()
 
 # ============================================
+# ПРОВЕРКА РЕЗУЛЬТАТОВ СТАРЫХ СИГНАЛОВ
+# ============================================
+def check_open_signals(history):
+    for entry in history:
+        if entry.get("status") != "open":
+            continue
+
+        current_price = get_current_price(entry["raw_symbol"])
+        if current_price is None:
+            continue
+
+        if entry["direction"] == "long":
+            if current_price >= entry["take_profit1"]:
+                entry["status"] = "win"
+                entry["result_price"] = current_price
+            elif current_price <= entry["stop_loss"]:
+                entry["status"] = "loss"
+                entry["result_price"] = current_price
+        else:
+            if current_price <= entry["take_profit1"]:
+                entry["status"] = "win"
+                entry["result_price"] = current_price
+            elif current_price >= entry["stop_loss"]:
+                entry["status"] = "loss"
+                entry["result_price"] = current_price
+
+    return history
+
+# ============================================
+# ОТЧЁТ КАЖДЫЕ 5 ДНЕЙ
+# ============================================
+def send_report(history):
+    closed = [h for h in history if h.get("status") in ("win", "loss")]
+
+    if not closed:
+        send_telegram("📊 <b>NET.AI — Отчёт за 5 дней</b>\n\nПока недостаточно завершённых сигналов для статистики. Продолжаем собирать данные.")
+        return
+
+    wins = len([h for h in closed if h["status"] == "win"])
+    losses = len([h for h in closed if h["status"] == "loss"])
+    total = wins + losses
+    winrate = round((wins / total) * 100, 1) if total > 0 else 0
+    still_open = len([h for h in history if h.get("status") == "open"])
+
+    msg = f"""
+📊 <b>NET.AI — Отчёт за 5 дней</b>
+━━━━━━━━━━━━━━━━━━━━
+✅ <b>Успешных сигналов:</b> {wins}
+❌ <b>Неудачных сигналов:</b> {losses}
+📈 <b>Винрейт:</b> {winrate}%
+🔄 <b>Ещё в процессе:</b> {still_open}
+📦 <b>Всего сигналов:</b> {len(history)}
+━━━━━━━━━━━━━━━━━━━━
+⚠️ Статистика по достижению первого тейк-профита (TP1) или стоп-лосса (SL).
+    """
+    send_telegram(msg.strip())
+
+# ============================================
 # ОСНОВНОЙ ЦИКЛ
 # ============================================
 def main():
     print("🚀 NET.AI Signal Bot запущен!")
-    send_telegram("🚀 <b>NET.AI Signal Bot запущен!</b>\n\nОтслеживаю BTC и ETH на 4H таймфрейме.\nМаксимум 5 сигналов в день.")
+    send_telegram(f"🚀 <b>NET.AI Signal Bot запущен!</b>\n\nОтслеживаю BTC и ETH на 1H таймфрейме.\nМаксимум {SIGNALS_PER_DAY} сигналов в день.\nОтчёт о результатах — каждые {REPORT_EVERY_DAYS} дней.")
 
+    history = load_history()
     signals_today = 0
     last_date = datetime.now().date()
     sent_signals = set()
+    start_date = datetime.now().date()
+    last_report_date = start_date
 
     while True:
         try:
             current_date = datetime.now().date()
 
-            # Сброс счётчика в новый день
             if current_date != last_date:
                 signals_today = 0
                 sent_signals = set()
                 last_date = current_date
                 print(f"📅 Новый день — счётчик сброшен")
+
+            history = check_open_signals(history)
+            save_history(history)
+
+            days_since_report = (current_date - last_report_date).days
+            if days_since_report >= REPORT_EVERY_DAYS:
+                send_report(history)
+                last_report_date = current_date
+                print("📊 Отчёт отправлен")
 
             if signals_today >= SIGNALS_PER_DAY:
                 print(f"✅ Лимит {SIGNALS_PER_DAY} сигналов на сегодня достигнут")
@@ -239,6 +341,18 @@ def main():
                         send_telegram(message)
                         sent_signals.add(signal_key)
                         signals_today += 1
+
+                        history.append({
+                            "raw_symbol": signal["raw_symbol"],
+                            "direction": signal["direction"],
+                            "entry_price": signal["price"],
+                            "take_profit1": signal["take_profit1"],
+                            "stop_loss": signal["stop_loss"],
+                            "timestamp": datetime.now().isoformat(),
+                            "status": "open"
+                        })
+                        save_history(history)
+
                         print(f"📨 Сигнал отправлен: {symbol} {signal['type']} ({signals_today}/{SIGNALS_PER_DAY})")
                         time.sleep(10)
                 else:
