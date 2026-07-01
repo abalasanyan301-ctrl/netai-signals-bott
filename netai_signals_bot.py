@@ -148,11 +148,29 @@ def analyze(symbol, candles):
     support = min([c["low"] for c in candles[-10:]])
     resistance = max([c["high"] for c in candles[-10:]])
 
+    # Ключевые уровни за все 50 свечей
+    highs = [c["high"] for c in candles]
+    lows = [c["low"] for c in candles]
+    key_resistances = sorted(set([round(h, 0) for h in highs]), reverse=True)[:5]
+    key_supports = sorted(set([round(l, 0) for l in lows]))[:5]
+
+    # Проверяем близость цены к ключевому уровню (в пределах 0.5%)
+    sr_signal = None
+    for level in key_resistances:
+        if abs(price - level) / level < 0.005:
+            sr_signal = {"zone_type": "🔴 СОПРОТИВЛЕНИЕ", "action": "возможный разворот вниз или пробой вверх", "level": level}
+            break
+    if not sr_signal:
+        for level in key_supports:
+            if abs(price - level) / level < 0.005:
+                sr_signal = {"zone_type": "🔵 ПОДДЕРЖКА", "action": "возможный отскок вверх или пробой вниз", "level": level}
+                break
+
     signal = None
 
-    if (volume_spike > 1.8 and
+    if (volume_spike > 1.3 and
         ema9 > ema21 and
-        rsi_val < 65 and
+        rsi_val < 70 and
         current["close"] > current["open"]):
 
         stop_loss = round(price * 0.97, 2)
@@ -175,9 +193,9 @@ def analyze(symbol, candles):
             "resistance": round(resistance, 2)
         }
 
-    elif (volume_spike > 1.8 and
+    elif (volume_spike > 1.3 and
           ema9 < ema21 and
-          rsi_val > 55 and
+          rsi_val > 45 and
           current["close"] < current["open"]):
 
         stop_loss = round(price * 1.03, 2)
@@ -357,6 +375,24 @@ def main():
                         time.sleep(10)
                 else:
                     print(f"🔍 {symbol}: сигнала нет")
+
+                # Отдельный сигнал по уровням поддержки/сопротивления
+                if sr_signal:
+                    sr_key = f"{symbol}_SR_{sr_signal['zone_type']}_{datetime.now().hour}"
+                    if sr_key not in sent_signals:
+                        now = datetime.now().strftime("%d.%m.%Y %H:%M")
+                        sr_msg = f"""📍 <b>КЛЮЧЕВОЙ УРОВЕНЬ — {symbol.replace("USDT", "/USDT")}</b>
+━━━━━━━━━━━━━━━━━━━━
+{sr_signal["zone_type"]}
+💰 <b>Цена:</b> ${candles[-1]["close"]:,}
+🎯 <b>Уровень:</b> ${sr_signal["level"]:,}
+⚡ <b>Сигнал:</b> {sr_signal["action"]}
+🕐 {now}
+━━━━━━━━━━━━━━━━━━━━
+⚠️ Торгуй осознанно. Это не финансовый совет."""
+                        send_telegram(sr_msg)
+                        sent_signals.add(sr_key)
+                        print(f"📍 Уровень отправлен: {symbol} {sr_signal['zone_type']}")
 
             time.sleep(CHECK_INTERVAL)
 
