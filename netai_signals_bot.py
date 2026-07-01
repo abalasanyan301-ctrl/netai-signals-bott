@@ -10,7 +10,7 @@ from datetime import datetime
 TELEGRAM_TOKEN = "8627627203:AAHIA45pQaoxrFT2en0Szlwfcpc64rBGOhk"
 CHAT_ID = "6975085722"
 SYMBOLS = ["BTCUSDT", "ETHUSDT"]
-INTERVAL = "1h"  # 1-часовой таймфрейм
+INTERVAL = "30m"  # 30-минутный таймфрейм
 SIGNALS_PER_DAY = 10
 CHECK_INTERVAL = 180  # проверка каждые 3 минуты (чаще, т.к. таймфрейм короче)
 REPORT_EVERY_DAYS = 5
@@ -53,8 +53,8 @@ def save_history(history):
 # ============================================
 # ПОЛУЧЕНИЕ ДАННЫХ С OKX
 # ============================================
-def get_klines(symbol, interval="1h", limit=50):
-    interval_map = {"4h": "4H", "1h": "1H", "15m": "15m", "1d": "1D"}
+def get_klines(symbol, interval="30m", limit=50):
+    interval_map = {"4h": "4H", "1h": "1H", "30m": "30m", "15m": "15m", "1d": "1D"}
     okx_interval = interval_map.get(interval, "1H")
     okx_symbol = symbol.replace("USDT", "-USDT")
 
@@ -219,7 +219,7 @@ def analyze(symbol, candles):
             "resistance": round(resistance, 2)
         }
 
-    return signal
+    return signal, sr_signal
 
 # ============================================
 # ФОРМАТИРОВАНИЕ СООБЩЕНИЯ СИГНАЛА
@@ -243,7 +243,7 @@ def format_signal(signal):
 🔵 <b>Поддержка:</b> ${signal['support']:,}
 🔴 <b>Сопротивление:</b> ${signal['resistance']:,}
 
-⏰ <b>Таймфрейм:</b> 1H
+⏰ <b>Таймфрейм:</b> 30M
 🕐 {now}
 ━━━━━━━━━━━━━━━━━━━━
 ⚠️ Торгуй осознанно. Это не финансовый совет.
@@ -313,7 +313,7 @@ def send_report(history):
 # ============================================
 def main():
     print("🚀 NET.AI Signal Bot запущен!")
-    send_telegram(f"🚀 <b>NET.AI Signal Bot запущен!</b>\n\nОтслеживаю BTC и ETH на 1H таймфрейме.\nМаксимум {SIGNALS_PER_DAY} сигналов в день.\nОтчёт о результатах — каждые {REPORT_EVERY_DAYS} дней.")
+    send_telegram(f"🚀 <b>NET.AI Signal Bot запущен!</b>\n\nОтслеживаю BTC и ETH на 30M таймфрейме.\nМаксимум {SIGNALS_PER_DAY} сигналов в день.\nОтчёт о результатах — каждые {REPORT_EVERY_DAYS} дней.")
 
     history = load_history()
     signals_today = 0
@@ -351,7 +351,7 @@ def main():
                     break
 
                 candles = get_klines(symbol, INTERVAL)
-                signal = analyze(symbol, candles)
+                signal, sr_signal = analyze(symbol, candles)
 
                 if signal:
                     signal_key = f"{symbol}_{signal['type']}_{datetime.now().hour}"
