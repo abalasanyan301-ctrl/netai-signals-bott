@@ -167,6 +167,7 @@ def analyze(symbol, candles):
                 break
 
     signal = None
+    sr_signal = None
 
     if (volume_spike > 1.3 and
         ema9 > ema21 and
